@@ -1,0 +1,11 @@
+(rule
+ (alias subroot)
+ (deps
+  (source_tree ./root)
+  (package makefoo))
+ (action
+  (system "dune build @all @runtest --root ./root")))
+ 
+(alias
+ (name runtest)
+ (deps (alias subroot)))

@@ -1,0 +1,11 @@
+(rule
+  (target foo.ml)
+  (action
+      (run makefoo)))
+
+(executable
+  (name foo))
+
+(rule
+  (alias runtest)
+  (action (run ./foo.exe)))
