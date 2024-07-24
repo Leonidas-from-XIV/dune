@@ -1192,7 +1192,6 @@ module Action_expander = struct
   let expander context (pkg : Pkg.t) ~override_pform =
     let+ { Artifacts_and_deps.binaries; dep_info } =
       Pkg.deps_closure pkg
-      |> List.filter ~f:(Fun.negate Pkg.is_system_provided)
       |> Artifacts_and_deps.of_closure
     in
     let env = Pkg.exported_value_env pkg in
