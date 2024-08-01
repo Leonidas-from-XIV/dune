@@ -1130,15 +1130,19 @@ module Action_expander = struct
   ;;
 
   let build_command context (pkg : Pkg.t) =
-    Option.map pkg.build_command ~f:(function
-      | Action action -> expand context pkg action
-      | Dune ->
+    match pkg.build_command with
+    (* | None -> expand context pkg (Dune_lang.Action.Progn []) |> Option.some *)
+    | None -> 
+        (Action.chdir pkg.paths.source_dir (Action.progn [])) |> Action.Full.make |> Action_builder.return |> Action_builder.with_no_targets |> Memo.return |> Option.some
+      | Some (Action action) -> expand context pkg action |> Option.some
+      | Some Dune ->
         (* CR-rgrinberg: respect [dune subst] settings. *)
         Command.run_dyn_prog
           (Action_builder.of_memo (dune_exe context))
           ~dir:pkg.paths.source_dir
           [ A "build"; A "-p"; A (Package.Name.to_string pkg.info.name) ]
-        |> Memo.return)
+        |> Memo.return
+        |> Option.some
   ;;
 
   let install_command context (pkg : Pkg.t) =
@@ -1714,6 +1718,7 @@ let source_rules (pkg : Pkg.t) =
         | `Directory_or_archive src ->
           loc, Action_builder.copy ~src:(Path.external_ src) ~dst:extra_source
         | `Fetch ->
+          Printf.eprintf "Fetching to %s\n" (Path.Build.to_string extra_source);
           let rule = Fetch_rules.fetch ~target:extra_source `File fetch in
           loc, rule
       in
@@ -1726,6 +1731,7 @@ let source_rules (pkg : Pkg.t) =
 ;;
 
 let build_rule context_name ~source_deps (pkg : Pkg.t) =
+  Printf.eprintf "creating build rule for pkg %s\n" (pkg.info.name |> Dune_lang.Package_name.to_string);
   let+ build_action =
     let+ build_and_install =
       let+ copy_action =
@@ -1755,19 +1761,37 @@ let build_rule context_name ~source_deps (pkg : Pkg.t) =
                        |> Action_builder.return))
             ]
         in
+        (* let source_dir_action = [ *)
+        (*   (1* let open Action_builder.O in *1) *)
+        (*   Action.mkdir pkg.write_paths.source_dir |> Action.Full.make |> Action_builder.With_targets.return *)
+        (* ] *)
+        (* in *)
+        (* source_dir_action @ *)
         copy_action
         @ List.map pkg.info.extra_sources ~f:(fun (local, _) ->
+          Printf.eprintf "creating copy rule for extra_source %s\n" (Path.Local.to_string local);
           let src = Paths.extra_source pkg.paths local in
           let dst = Path.Build.append_local pkg.write_paths.source_dir local in
-          Action.copy src dst |> Action.Full.make |> Action_builder.With_targets.return)
+          Printf.eprintf "dst is %s\n" (Path.Build.to_string dst);
+
+          let ab = Action.copy src dst |> Action.Full.make |> Action_builder.With_targets.return
+          in
+          let add_dst = String.ends_with ~suffix:"META.seq" (Path.Build.to_string dst) && false in
+          match add_dst with
+          | true ->
+            Action_builder.With_targets.add ~file_targets:[dst] ab
+          | false -> ab)
       and+ build_action =
         match Action_expander.build_command context_name pkg with
         | None -> Memo.return []
         | Some build_command -> build_command >>| List.singleton
       and+ install_action =
         match Action_expander.install_command context_name pkg with
-        | None -> Memo.return []
+        | None ->
+            Printf.eprintf "No install action\n";
+            Memo.return []
         | Some install_action ->
+          Printf.eprintf "Attempting to build an install action\n";
           let+ install_action = install_action in
           let mkdir_install_dirs =
             let install_paths = Paths.install_paths pkg.write_paths in
@@ -1780,6 +1804,7 @@ let build_rule context_name ~source_deps (pkg : Pkg.t) =
           in
           [ mkdir_install_dirs; install_action ]
       in
+      Printf.eprintf "concatting the copy_action to form build_and_install\n";
       List.concat [ copy_action; build_action; install_action ]
     in
     let install_file_action =
@@ -1794,9 +1819,12 @@ let build_rule context_name ~source_deps (pkg : Pkg.t) =
       |> Action_builder.return
       |> Action_builder.with_no_targets
     in
+    Printf.eprintf "progn-ing build_and_install with other stuff\n";
     Action_builder.progn (build_and_install @ [ install_file_action ])
   in
   let deps = Dep.Set.union source_deps (Pkg.package_deps pkg) in
+  let _deps = Dep.Set.to_dyn deps in
+  Printf.eprintf "Deps are %s\n" (Dyn.to_string _deps);
   let open Action_builder.With_targets.O in
   Action_builder.deps deps
   |> Action_builder.with_no_targets
@@ -1810,6 +1838,10 @@ let gen_rules context_name (pkg : Pkg.t) =
   let* source_deps, copy_rules = source_rules pkg in
   let* () = copy_rules
   and* build_rule = build_rule context_name pkg ~source_deps in
+  Printf.eprintf "got build rule for pkg %s\n" (pkg.info.name |> Dune_lang.Package_name.to_string);
+  let targ = build_rule.targets in
+  let targ = Targets.to_dyn targ in
+  Printf.eprintf "Targets are %s\n" (Dyn.to_string targ);
   rule ~loc:Loc.none (* TODO *) build_rule
 ;;
 
