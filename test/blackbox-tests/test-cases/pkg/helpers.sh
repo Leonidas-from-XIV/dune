@@ -13,8 +13,8 @@ dune="dune"
 
 pkg_root="_build/_private/default/.pkg"
 
-default_lock_dir="dune.lock"
-source_lock_dir="${default_lock_dir}"
+default_lock_dir="_build/_private/default/.lock/dune.lock"
+source_lock_dir="dune.lock"
 
 build_pkg() {
   $dune build $pkg_root/$1/target/
@@ -76,6 +76,14 @@ unset_pkg() {
   sed -i.bak "/(pkg/d" dune-workspace
 }
 
+add_mock_repo() {
+  cat >> dune-workspace <<EOF
+(repository
+ (name mock)
+ (url "${repo}"))
+EOF
+}
+
 add_mock_repo_if_needed() {
   # default, but can be overridden, e.g. if git is required
   repo="${1:-file://$(pwd)/mock-opam-repository}"
@@ -94,12 +102,7 @@ EOF
   else
     if ! grep '(name mock)' > /dev/null dune-workspace
     then
-      # add the repo definition
-      cat >>dune-workspace <<EOF
-(repository
- (name mock)
- (url "${repo}"))
-EOF
+      add_mock_repo "${repo}"
  
       # reference the repo
       if grep -s '(repositories'
@@ -151,7 +154,7 @@ make_lockpkg_file() {
 solve_project() {
   cat >dune-project
   add_mock_repo_if_needed
-  dune pkg lock $@
+  dune pkg lock
 }
 
 make_lockdir() {
