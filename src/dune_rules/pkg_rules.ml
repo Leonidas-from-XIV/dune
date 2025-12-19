@@ -1204,7 +1204,6 @@ module DB = struct
     type entry =
       { pkg : Pkg.t
       ; deps : dep list
-      ; has_dune_dep : bool
       ; pkg_digest : Pkg_digest.t
       }
 
@@ -1234,30 +1233,24 @@ module DB = struct
         Package.Name.Table.find_or_add cache pkg.info.name ~f:(fun name ->
           let seen_set = Package.Name.Set.add seen_set name in
           let seen_list = pkg :: seen_list in
-          let system_deps, deps =
+          let deps =
             Dune_pkg.Lock_dir.Conditional_choice.choose_for_platform pkg.depends ~platform
             |> Option.value ~default:[]
-            |> List.partition_map
+            |> List.filter_map
                  ~f:(fun { Dune_pkg.Lock_dir.Dependency.name; loc = dep_loc } ->
                    if Package.Name.Set.mem system_provided name
-                   then Left name
+                   then None
                    else (
                      let dep_pkg = Package.Name.Map.find_exn pkgs_by_name name in
                      let dep_entry = compute_entry dep_pkg ~seen_set ~seen_list in
-                     Right { dep_pkg; dep_loc; dep_pkg_digest = dep_entry.pkg_digest }))
-          in
-          let has_dune_dep =
-            List.mem
-              ~equal:Dune_lang.Package_name.equal
-              system_deps
-              Dune_pkg.Dune_dep.name
+                     Some { dep_pkg; dep_loc; dep_pkg_digest = dep_entry.pkg_digest }))
           in
           let pkg_digest =
             Pkg_digest.create
               pkg
               (List.map deps ~f:(fun { dep_pkg_digest; _ } -> dep_pkg_digest))
           in
-          { pkg; deps; has_dune_dep; pkg_digest })
+          { pkg; deps; pkg_digest })
       in
       Package.Name.Map.map
         pkgs_by_name
@@ -1280,8 +1273,8 @@ module DB = struct
        dependencies are identical as a sanity check. *)
     let union_check
           pkg_digest
-          ({ pkg = pkg_a; deps = deps_a; has_dune_dep = _; pkg_digest = _ } as entry)
-          { pkg = pkg_b; deps = deps_b; has_dune_dep = _; pkg_digest = _ }
+          ({ pkg = pkg_a; deps = deps_a; pkg_digest = _ } as entry)
+          { pkg = pkg_b; deps = deps_b; pkg_digest = _ }
       =
       if not (Pkg.equal (Pkg.remove_locs pkg_a) (Pkg.remove_locs pkg_b))
       then
@@ -1484,7 +1477,6 @@ end = struct
             ; enabled_on_platforms = _
             } as pkg
         ; deps
-        ; has_dune_dep
         ; pkg_digest = _
         } ->
       assert (Package.Name.equal pkg_digest.name info.name);
@@ -1594,12 +1586,19 @@ end = struct
           ; install_roots = Lazy.from_val install_roots
           }
       in
+      let depends_on_dune =
+        Dune_pkg.Lock_dir.Conditional_choice.choose_for_platform pkg.depends ~platform
+        |> Option.value ~default:[]
+        |> List.find ~f:(fun { Dune_pkg.Lock_dir.Dependency.name; loc = _ } ->
+          Dune_lang.Package_name.equal name Dune_pkg.Dune_dep.name)
+        |> Option.is_some
+      in
       let t =
         { Pkg.id
         ; build_command
         ; install_command
         ; depends
-        ; depends_on_dune = has_dune_dep
+        ; depends_on_dune
         ; depexts
         ; paths
         ; write_paths
